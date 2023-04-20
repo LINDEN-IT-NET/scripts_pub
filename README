@@ -1,0 +1,22 @@
+# Christian Linden, 230302
+
+Das Script createReport.sh ruft das get_report.yml playbook auf \
+und erstellt einen tabellarischen Report in Form von: \
+hostname        os-release      kernel-version \
+in der Datei report.out
+
+report.out wird aus den drei vorher erstellten Dateien \
+hostnames.out, rhel-versions.out und kernels.out zusammengeführt. \
+
+report.out wird 1x nach jeder Spalte sortiert und resultiert in drei \
+sortierten Reports, 1x nach Hostnamen, 1x nach RHEL-Release und 1x \
+nach Kernel-Version.
+Darüber wird je das aktuelle Datum und die latest Versionen der Kernel \
+angezeigt.
+
+Die Files werden auf den NFS-Share /u01/smbshares/InfoBase/InfoBase/Kommunikation/Gateways/ftgw_patch_staende kopiert.
+
+Die Gruppe von Servern, von denen der Report generiert werden soll, \
+ist im Playbook zu definieren und muss in der /etc/ansible/hosts \
+definiert sein. Mehrere einzelene Server oder Gruppen werden durch \
+Komma getrennt.
