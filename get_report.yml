@@ -1,0 +1,21 @@
+---
+# Playbook filters hostname, os-release and kernel-version out of the facts
+# is called by createReport.sh
+# Christian Linden, 230223
+#
+- name: get report
+
+  hosts: all
+  gather_facts: True
+  #strategy: free
+  #serial: "25%"
+
+  tasks:
+
+    - name: get nodename, distribution version and kernel
+      debug:
+        msg:
+          - "{{ ansible_facts['nodename'] }}"
+          - '{{ ansible_distribution }} {{ ansible_distribution_version }}'
+          - '{{ ansible_kernel }}'
+...
