@@ -1,0 +1,32 @@
+---
+- name: delete files
+  hosts: hostname
+  gather_facts: no
+
+  user: root
+
+  tasks:
+
+  - name: find all files w/ pattern*
+    find:
+      paths: "/usr/local/etc/sshd/.authorized_keys-test-cl"
+      patterns: "pattern*"
+    register: collected_files
+
+  - name find directories
+    find:
+      path: "/path/to/somewhere/"
+      hidden: True
+      recurse: True
+      file_type: directory
+    register: collected_directories
+
+  #- debug:
+  #    msg: "{{ collected_files }}"
+
+  - name: delete the above find files
+    file:
+       path: "{{ item.path }}"
+       state: absent
+    with_items: " {{ collected_files.files }}"
+...
