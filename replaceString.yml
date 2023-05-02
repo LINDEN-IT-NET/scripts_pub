@@ -1,0 +1,19 @@
+---
+- name: replace string in line
+
+  hosts: hostname/s
+  gather_facts: False
+
+  tasks:
+
+    - name: replace string in line
+      ansible.builtin.replace:
+        path: /what/ever/path
+        regexp: "{{ item.regex }}"
+        replace: "{{ item.replacement }}"
+      with_items:
+        - regex: 'denweg '
+          replacement: ''
+        - regex: 'undden '
+          replacement: ''
+...
