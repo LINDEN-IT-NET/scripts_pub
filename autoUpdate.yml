@@ -1,0 +1,282 @@
+---
+# Playbook zum teilautomatisierten Update der LBs
+# Christian Linden, 2306-2308
+#
+# 1. Snapshot erstellen
+# 2. start_LB_update-cl.sh hostname; kann hier eingebaut werden
+# 2. HW-LBs unterscheiden: wenn es /etc/lvs gibt, ist es ein HW-LB
+# 3. get vip nic aus /etc/keepalived/virtual_ipaddress_excluded.conf
+# 4. prüfen ob VIP drauf ist
+# 5. wenn ja, ist der LB master, wenn nein (leer), der backup
+# 6. Damians udpate script auf den backup laufen lassen, das stopped und disabled den keepalived
+# 8. lb rebooten
+# 9. keepalived enablen und starten via postUpdate.yml
+#
+- name: update masterLBs
+#
+
+  hosts: updateMasterLBs
+  gather_facts: True
+  #vars:
+  #    conf_file: /etc/keepalived/virtual_ipaddress_excluded.conf
+
+  tasks:
+
+    # first running playbooks from /root/ansible/playbooks/startlists/HW_LB_update.lst (Das HW im Namen ist irreführend, schon o                              k für virtuelle LBs)
+
+    - name: update role runs tasks from /root/ansible/playbooks/startlists/HW_LB_update.lst
+      import_role:
+        name: updateLB
+
+    #- name: delete and recreate files
+    #  import_role:
+    #    name: cleanFilesLB
+
+    - name: pause
+      ansible.builtin.pause:
+        prompt: "Es sind soeben alle Tasks aus der startlist HW_LB_update.lst via der role abgearbeitet worden, weiter mit Enter                              "
+
+    - name: check if hw lb
+      ansible.builtin.stat:
+        path: "/etc/lvs"
+      register: lvs_result
+
+    #- name: print var
+    #  debug:
+    #    var: lvs_result
+
+    - name: set fact virtLB false
+      ansible.builtin.set_fact:
+        virtLB: false
+      when: lvs_result.stat.exists == true
+
+    - name: set fact virtLB true
+      ansible.builtin.set_fact:
+        virtLB: true
+      when: lvs_result.stat.exists == false
+
+    - name: get /etc/keepalived/virtual_ipaddress_excluded.conf file
+      ansible.builtin.slurp:
+        src: /etc/keepalived/virtual_ipaddress_excluded.conf
+      register: virtual_ipaddress_excluded_file
+
+    - name: set fact vips (getting vips from file)
+      ansible.builtin.set_fact:
+        vips: "{{ virtual_ipaddress_excluded_file['content'] | b64decode |  regex_findall('(?<!\\d)(?:\\d{1,3}\\.){3}\\d{1,3}(?!                              \\d)') }}"
+        #vips: "{{ virtual_ipaddress_excluded_file['content'] | b64decode |  regex_findall('(!^#)(?<!\\d)(?:\\d{1,3}\\.){3}\\d{1                              ,3}(?!\\d)') }}"
+        #vips: "{{ virtual_ipaddress_excluded_file['content'] | b64decode |  regex_findall('(?<=#)(?:\\d{1,3}\\.){3}\\d{1,3}(?!\                              \d)') }}"
+
+    - name: debug vips
+      debug:
+       msg: "{{ vips }}"
+
+    - name: pause
+      ansible.builtin.pause:
+        prompt: "check vips ende"
+
+    - name: initialize masterLB to false
+      ansible.builtin.set_fact:
+        masterLB: no
+
+    - name: set bool facts if primary vip is on any eth
+      ansible.builtin.set_fact:
+        VipOnEthX: yes
+        masterLB: yes
+      when: ((ansible_facts['eth0']['ipv4'] is defined) and (item in ansible_facts['eth0']['ipv4']['address'])) or
+            ((ansible_facts['eth0']['ipv4_secondaries'] is defined) and (item in ansible_facts['eth0']['ipv4_secondaries'] | sel                              ectattr('address', 'defined') | map(attribute='address'))) or
+            ((ansible_facts['eth1']['ipv4'] is defined) and (item in ansible_facts['eth1']['ipv4']['address'])) or
+            ((ansible_facts['eth1']['ipv4_secondaries'] is defined) and (item in ansible_facts['eth1']['ipv4_secondaries'] | sel                              ectattr('address', 'defined') | map(attribute='address')))
+      with_items: "{{ vips }}"
+
+    - name: block
+      block:
+        - name: get hostname with active vip/s
+          ansible.builtin.debug:
+            msg: "{{ ansible_hostname }} has active vip {{ item }}"
+          with_items: "{{ vips }}"
+
+        - name: write active LBs with VIPs to file
+          ansible.builtin.lineinfile:
+            line: "{{ ansible_hostname }} has active vip {{ item }}"
+            insertafter: EOF
+            dest: /tmp/activeLBs.out
+          delegate_to: 127.0.0.1
+          with_items: "{{ vips }}"
+
+        - name: write VIPs to pingLBlist.txt for pinging by pingLB.ps1 script
+          ansible.builtin.lineinfile:
+            line: "{{ item }}"
+            insertafter: EOF
+            dest: /u01/loadbalancer/redhat/rhelVmUpdate/pingLBlist.txt
+          delegate_to: 127.0.0.1
+          with_items: "{{ vips }}"
+      when: (ansible_facts['eth0']['ipv4'] is defined) and (item in ansible_facts['eth0']['ipv4']['address']) or
+            (ansible_facts['eth0']['ipv4_secondaries'] is defined) and (item in ansible_facts['eth0']['ipv4_secondaries'] | sele                              ctattr('address', 'defined') | map(attribute='address')) or
+            (ansible_facts['eth1']['ipv4'] is defined) and (item in ansible_facts['eth1']['ipv4']['address']) or
+            (ansible_facts['eth1']['ipv4_secondaries'] is defined) and (item in ansible_facts['eth1']['ipv4_secondaries'] | sele                              ctattr('address', 'defined') | map(attribute='address'))
+
+    # ###################################################################################################
+
+    - name: print boolean facts vipOnEth0, virtLB and masterLBEth0
+      ansible.builtin.debug:
+        msg: "vipOnEth0: {{ vipOnEth0 }}, virtual LB: {{ virtLB }}, masterLBEth0: {{ masterLBEth0 }}"
+      when:
+        - vipOnEth0 is defined
+        - vipOnEth0
+      #when: vipOnEth0 is defined
+
+    - name: print boolean facts vipOnEth1, virtLB and masterLBEth1
+      ansible.builtin.debug:
+        msg: "vipOnEth1: {{ vipOnEth1 }}, virtual LB: {{ virtLB }}, masterLBEth1: {{ masterLBEth1 }}"
+      when:
+        - vipOnEth1 is defined
+        - vipOnEth1
+
+    - name: write file with VIPs on hosts (unsorted, find primary and 2ndary not possible -> Python)
+      ansible.builtin.lineinfile:
+        line: "{{ item }} is configured on {{ ansible_hostname }}"
+        insertafter: EOF
+        dest: /tmp/VIPsOnLBs.out
+      delegate_to: 127.0.0.1
+      when:
+        - item in virtual_ipaddress_excluded_file['content'] | b64decode
+      with_items: "{{ vips }}"
+
+    - name: sort file with LB pairs
+      ansible.builtin.debug:
+        msg: "sorted VIPsOnLBs.out: {{ lookup('file', '/tmp/VIPsOnLBs.out').splitlines() | sort }}"
+      delegate_to: 127.0.0.1
+
+    # check if rhel7 system is already updated
+    - name: block to check if system is already updated (by checking running kernel)
+      block:
+        - name: check if system is already updated
+          ansible.builtin.script: /root/ansible/playbooks/cl/update/getRunningKernel7.sh
+          register: latest_kernel7
+          delegate_to: 127.0.0.1
+
+        - name: print latest kernel rhel7
+          ansible.builtin.debug:
+            var: latest_kernel7.stdout | trim
+
+        - name: get running kernel
+          ansible.builtin.shell:
+            cmd:  uname -r
+          register: running_kernel7
+
+        - name: print running kernel rhel7
+          ansible.builtin.debug:
+            var: running_kernel7.stdout
+
+        - name: compare running with latest kernel
+          ansible.builtin.debug:
+            msg: "The system is already updated, I will exit."
+          when: (latest_kernel7.stdout | trim) == running_kernel7.stdout
+
+        - name: exit
+          ansible.builtin.meta: end_play
+          when: (latest_kernel7.stdout | trim) == running_kernel7.stdout
+      when: ansible_facts['distribution_major_version']=="7"
+    # check end
+
+    - name: message b4 update
+      ansible.builtin.debug:
+        msg:
+         - "Es handelt sich um einen virtuellen PRIMÄREN AKTIVEN LB: {{ ansible_hostname }}."
+         - "virtual LB: {{ virtLB }}, masterLB: {{ masterLB }}"
+         - "Stelle sicher, dass Du einen Snapshot erstellt hast und dass der keepalived auf dem Partner LB läuft, um die VIP/s ü                              bernehmen zu können."
+         - "bzw. dass Du 15min nach dem Reboot des standby LBs dass postUpdate.yml ausgeführt hast."
+         - "Hier ist/sind die VIP/s des LBs: {{ vips }}"
+         - "pinge sie oder zumindest eine, um die Erreichbarkeit zu monitoren."
+         - "Die VIPS wurden nach file://10.135.177.200/loadbalancer/redhat/rhelVmUpdate/pingLBlist.txt geschrieben."
+         - "Kopiere Dir das file://10.135.177.200/loadbalancer/redhat/rhelVmUpdate/pingLBs.ps1 auf Deine Sina und führe es in de                              r powershell aus."
+         - "Es werden dann direkt alle VIPs gepingt und man sieht, wenn eine nicht erreichbar ist."
+         - "Das Update wird auf Enter durchgeführt."
+      when:
+        - virtLB == true
+        - masterLB == true
+
+    - name: pause
+      ansible.builtin.pause:
+        prompt: "Press Enter to update"
+
+    - name: run update script, this takes a couple of minutes
+      ansible.builtin.command: /u01/loadbalancer/redhat/rhelVmUpdate/rhel_7_VMUpdate_ohneVersionsCheck_allRepo-cl.sh {{ ansible_                              hostname }}
+      delegate_to: 127.0.0.1
+      when:
+        - virtLB == true
+        - masterLB == true
+
+    - name: rebooting message
+      ansible.builtin.debug:
+        msg:
+         - "Die LBs sind upgedated und müssen rebooted werden."
+         - "Du kannst mit:"
+         - "for i in LB1 LB2 LB3 ..;  do echo $i; ssh $i 'systemctl status keepalived | grep loaded'; done"
+         - "nochmal sichergehen, dass der keepalived gestoppt und disabled ist. (brauchst Du aber nicht ;-))"
+      when:
+        - virtLB == true
+        - masterLB == true
+
+    - name: pause
+      ansible.builtin.pause:
+        prompt: "Press Enter to reboot."
+
+    - name: rebooting LBs, this takes one or two minutes, just standby
+      ansible.builtin.reboot:
+        reboot_timeout: 60 #1min
+      when:
+        - virtLB == true
+        - masterLB == true
+
+    - name: write master lbs to file
+      ansible.builtin.lineinfile:
+        line: "{{ ansible_hostname }}"
+        insertafter: EOF
+        dest: /tmp/masterLBs.out
+      delegate_to: 127.0.0.1
+      when:
+        - masterLB is defined
+        - masterLB == true
+
+   # - name: clean/recreate /tmp/standby-lbs.out file part 1
+   #   ansible.builtin.file:
+   #     path: /tmp/master-lbs.out
+   #     state: absent
+   #   delegate_to: 127.0.0.1
+
+   # - name: clean/recreate /tmp/standby-lbs.out file part 2
+   #   ansible.builtin.file:
+   #     path: /tmp/master-lbs.out
+   #     state: touch
+   #   delegate_to: 127.0.0.1
+
+    - name: write standby lbs to file
+      ansible.builtin.lineinfile:
+        line: "{{ ansible_hostname }}"
+        insertafter: EOF
+        dest: /tmp/standbyLBs.out
+      delegate_to: 127.0.0.1
+      when:
+        - masterLB is not defined
+
+   # - name: clean/recreate /tmp/hw-lbs.out file part 1
+   #   ansible.builtin.file:
+   #     path: /tmp/master-lbs.out
+   #     state: absent
+   #   delegate_to: 127.0.0.1
+
+   # - name: clean/recreate /tmp/hw-lbs.out file part 2
+   #   ansible.builtin.file:
+   #     path: /tmp/master-lbs.out
+   #     state: touch
+   #   delegate_to: 127.0.0.1
+
+    - name: write hw lbs to local file
+      ansible.builtin.lineinfile:
+        line: "{{ ansible_hostname }}"
+        insertafter: EOF
+        dest: /tmp/hw-lbs.out
+      delegate_to: 127.0.0.1
+      when: lvs_result.stat.exists == true
+...
